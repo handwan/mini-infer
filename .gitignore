@@ -1,0 +1,9 @@
+# 构建产物
+build/
+
+# 第三方依赖
+third_party/*
+!third_party/README.md
+
+# clangd 索引缓存
+.cache/

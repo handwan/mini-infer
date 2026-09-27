@@ -1,0 +1,4 @@
+If:
+  PathMatch: third_party/.*
+Diagnostics:
+  Suppress: ['*']
