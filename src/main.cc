@@ -1,11 +1,16 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cinttypes>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <sstream>
+#include <string>
 #include <thread>
 
+#include "engine/onnx_engine.h"
 #include "httplib.h"
 
 namespace {
@@ -22,9 +27,9 @@ int64_t nowMs() {
         .count();
 }
 
-// 打印一次 /echo 的处理耗时（毫秒）
-void logEchoCost(int64_t start_ms) {
-    printf("echo took %" PRId64 " ms\n", nowMs() - start_ms);
+// 打印一次处理的耗时（毫秒）
+void logCost(const char* name, int64_t start_ms) {
+    printf("%s took %" PRId64 " ms\n", name, nowMs() - start_ms);
 }
 
 }  // namespace
@@ -36,6 +41,15 @@ int main(int argc, char** argv) {
     }
     if (const char* env = std::getenv("PORT")) {
         port = std::atoi(env);
+    }
+
+    // 加载模型：失败就退出（Ort::Exception 也是 std::exception）
+    std::unique_ptr<OnnxEngine> engine;
+    try {
+        engine = std::make_unique<OnnxEngine>("models/tiny_mlp.onnx");
+    } catch (const std::exception& e) {
+        fprintf(stderr, "failed to load model: %s\n", e.what());
+        return 1;
     }
 
     httplib::Server svr;
@@ -62,13 +76,57 @@ int main(int argc, char** argv) {
     svr.Post("/echo", [](const httplib::Request& req, httplib::Response& res) {
         const int64_t t0 = nowMs();
         res.set_content(req.body, "text/plain");
-        logEchoCost(t0);
+        logCost("echo", t0);
     });
     svr.Get("/echo", [](const httplib::Request& req, httplib::Response& res) {
         const int64_t t0 = nowMs();
         res.set_content(req.target, "text/plain");  // 回显路径+query
-        logEchoCost(t0);
+        logCost("echo", t0);
     });
+
+    // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
+    svr.Post("/predict",
+             [&engine](const httplib::Request& req, httplib::Response& res) {
+                 std::vector<float> xs;
+                 std::stringstream ss(req.body);
+                 std::string tok;
+                 while (std::getline(ss, tok, ',')) {
+                     try {
+                         xs.push_back(std::stof(tok));
+                     } catch (const std::exception&) {
+                         res.status = 400;
+                         res.set_content(R"({"error":"invalid number"})",
+                                         "application/json");
+                         return;
+                     }
+                 }
+
+                 const int64_t dim = engine->input_dim();
+                 if (xs.empty() || xs.size() % static_cast<size_t>(dim) != 0) {
+                     res.status = 400;
+                     const std::string err =
+                         R"({"error":"input size must be a multiple of )" +
+                         std::to_string(dim) + R"("})";
+                     res.set_content(err, "application/json");
+                     return;
+                 }
+
+                 const int64_t t0 = nowMs();
+                 const std::vector<float> out = engine->Run(xs);
+                 logCost("predict", t0);
+
+                 std::string body = R"({"output":[)";
+                 for (size_t i = 0; i < out.size(); ++i) {
+                     std::array<char, 32> buf{};
+                     snprintf(buf.data(), buf.size(), "%.6g", out[i]);
+                     if (i > 0) {
+                         body += ",";
+                     }
+                     body += buf.data();
+                 }
+                 body += "]}";
+                 res.set_content(body, "application/json");
+             });
 
     // 优雅退出：收到信号 → 另起线程调 stop()（listen 会返回）
     std::signal(SIGINT, onSignal);
@@ -82,8 +140,8 @@ int main(int argc, char** argv) {
     });
 
     printf(
-        "mini-infer listening on http://0.0.0.0:%d (/health, /echo, "
-        "/version)\n",
+        "mini-infer listening on http://0.0.0.0:%d (/health, /echo, /version, "
+        "/predict)\n",
         port);
     if (!svr.listen("0.0.0.0", port)) {
         fprintf(stderr, "failed to start: port %d may be in use\n", port);

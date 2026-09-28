@@ -5,5 +5,8 @@ build/
 third_party/*
 !third_party/README.md
 
+# 模型文件（用 scripts/export_model.py 生成）
+models/
+
 # clangd 索引缓存
 .cache/

@@ -15,14 +15,23 @@ add_compile_options(-Wall -Wextra)
 add_library(httplib INTERFACE)
 target_include_directories(httplib SYSTEM INTERFACE ${CMAKE_SOURCE_DIR}/third_party)
 
+# ONNX Runtime：预编译包（用 scripts/fetch_deps.sh 拉）
+add_library(onnxruntime INTERFACE)
+target_include_directories(onnxruntime SYSTEM INTERFACE
+  ${CMAKE_SOURCE_DIR}/third_party/onnxruntime/include)
+target_link_libraries(onnxruntime INTERFACE
+  ${CMAKE_SOURCE_DIR}/third_party/onnxruntime/lib/libonnxruntime.so)
+
 find_package(Threads REQUIRED)
 
 add_executable(mini-infer
   src/main.cc
-
+  src/engine/onnx_engine.cc
 )
 
-target_link_libraries(mini-infer PRIVATE httplib Threads::Threads)
+target_include_directories(mini-infer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+target_link_libraries(mini-infer PRIVATE httplib onnxruntime Threads::Threads)
 
 # 可执行文件直接落在 build/ 下，方便 ./build/mini-infer 这样跑
 set_target_properties(mini-infer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
