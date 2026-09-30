@@ -27,6 +27,7 @@ find_package(Threads REQUIRED)
 add_executable(mini-infer
   src/main.cc
   src/engine/onnx_engine.cc
+  src/batch/dynamic_batcher.cc
 )
 
 target_include_directories(mini-infer PRIVATE ${CMAKE_SOURCE_DIR}/src)

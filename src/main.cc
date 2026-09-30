@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 
+#include "batch/dynamic_batcher.h"
 #include "engine/onnx_engine.h"
 #include "httplib.h"
 
@@ -43,14 +44,38 @@ int main(int argc, char** argv) {
         port = std::atoi(env);
     }
 
+    // 模型路径可用环境变量换（做对照实验）：MODEL_PATH=models/wide_mlp.onnx
+    std::string model_path = "models/tiny_mlp.onnx";
+    if (const char* env = std::getenv("MODEL_PATH")) {
+        model_path = env;
+    }
+
     // 加载模型：失败就退出（Ort::Exception 也是 std::exception）
     std::unique_ptr<OnnxEngine> engine;
     try {
-        engine = std::make_unique<OnnxEngine>("models/tiny_mlp.onnx");
+        engine = std::make_unique<OnnxEngine>(model_path);
     } catch (const std::exception& e) {
         fprintf(stderr, "failed to load model: %s\n", e.what());
         return 1;
     }
+
+    // 动态批处理：多个请求攒成一批一起算
+    // 参数支持环境变量（做扫描实验时不用重新编译）：BATCH_MAX、BATCH_WINDOW_US
+    DynamicBatcher::Config batch_cfg;
+    batch_cfg.input_dim = engine->input_dim();
+    batch_cfg.output_dim = engine->output_dim();
+    batch_cfg.max_batch = 8;
+    batch_cfg.window = std::chrono::microseconds(2000);
+    if (const char* env = std::getenv("BATCH_MAX")) {
+        batch_cfg.max_batch = std::atoll(env);
+    }
+    if (const char* env = std::getenv("BATCH_WINDOW_US")) {
+        batch_cfg.window = std::chrono::microseconds(std::atoll(env));
+    }
+    DynamicBatcher batcher(
+        batch_cfg, [&engine](const std::vector<float>& x, int64_t /*batch*/) {
+            return engine->Run(x);
+        });
 
     httplib::Server svr;
 
@@ -85,48 +110,55 @@ int main(int argc, char** argv) {
     });
 
     // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
-    svr.Post("/predict",
-             [&engine](const httplib::Request& req, httplib::Response& res) {
-                 std::vector<float> xs;
-                 std::stringstream ss(req.body);
-                 std::string tok;
-                 while (std::getline(ss, tok, ',')) {
-                     try {
-                         xs.push_back(std::stof(tok));
-                     } catch (const std::exception&) {
-                         res.status = 400;
-                         res.set_content(R"({"error":"invalid number"})",
-                                         "application/json");
-                         return;
-                     }
-                 }
+    svr.Post("/predict", [&batcher, &engine](const httplib::Request& req,
+                                             httplib::Response& res) {
+        std::vector<float> xs;
+        std::stringstream ss(req.body);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            try {
+                xs.push_back(std::stof(tok));
+            } catch (const std::exception&) {
+                res.status = 400;
+                res.set_content(R"({"error":"invalid number"})",
+                                "application/json");
+                return;
+            }
+        }
 
-                 const int64_t dim = engine->input_dim();
-                 if (xs.empty() || xs.size() % static_cast<size_t>(dim) != 0) {
-                     res.status = 400;
-                     const std::string err =
-                         R"({"error":"input size must be a multiple of )" +
-                         std::to_string(dim) + R"("})";
-                     res.set_content(err, "application/json");
-                     return;
-                 }
+        const int64_t dim = engine->input_dim();
+        if (xs.empty() || xs.size() % static_cast<size_t>(dim) != 0) {
+            res.status = 400;
+            const std::string err =
+                R"({"error":"input size must be a multiple of )" +
+                std::to_string(dim) + R"("})";
+            res.set_content(err, "application/json");
+            return;
+        }
 
-                 const int64_t t0 = nowMs();
-                 const std::vector<float> out = engine->Run(xs);
-                 logCost("predict", t0);
+        const int64_t t0 = nowMs();
+        std::vector<float> out;
+        for (size_t off = 0; off < xs.size(); off += static_cast<size_t>(dim)) {
+            const std::vector<float> sample(
+                xs.begin() + static_cast<ptrdiff_t>(off),
+                xs.begin() + static_cast<ptrdiff_t>(off + dim));
+            const std::vector<float> r = batcher.Submit(sample);
+            out.insert(out.end(), r.begin(), r.end());
+        }
+        logCost("predict", t0);
 
-                 std::string body = R"({"output":[)";
-                 for (size_t i = 0; i < out.size(); ++i) {
-                     std::array<char, 32> buf{};
-                     snprintf(buf.data(), buf.size(), "%.6g", out[i]);
-                     if (i > 0) {
-                         body += ",";
-                     }
-                     body += buf.data();
-                 }
-                 body += "]}";
-                 res.set_content(body, "application/json");
-             });
+        std::string body = R"({"output":[)";
+        for (size_t i = 0; i < out.size(); ++i) {
+            std::array<char, 32> buf{};
+            snprintf(buf.data(), buf.size(), "%.6g", out[i]);
+            if (i > 0) {
+                body += ",";
+            }
+            body += buf.data();
+        }
+        body += "]}";
+        res.set_content(body, "application/json");
+    });
 
     // 优雅退出：收到信号 → 另起线程调 stop()（listen 会返回）
     std::signal(SIGINT, onSignal);
@@ -143,6 +175,9 @@ int main(int argc, char** argv) {
         "mini-infer listening on http://0.0.0.0:%d (/health, /echo, /version, "
         "/predict)\n",
         port);
+    printf("batching: max_batch=%lld window=%lldus\n",
+           static_cast<long long>(batch_cfg.max_batch),
+           static_cast<long long>(batch_cfg.window.count()));
     if (!svr.listen("0.0.0.0", port)) {
         fprintf(stderr, "failed to start: port %d may be in use\n", port);
         g_stop.store(true);
@@ -151,6 +186,14 @@ int main(int argc, char** argv) {
     }
 
     watcher.join();
+    const auto st = batcher.stats();
+    const double avg = st.batches > 0 ? static_cast<double>(st.requests) /
+                                            static_cast<double>(st.batches)
+                                      : 0.0;
+    printf("batcher stats: requests=%llu batches=%llu avg=%.2f max=%llu\n",
+           static_cast<unsigned long long>(st.requests),
+           static_cast<unsigned long long>(st.batches), avg,
+           static_cast<unsigned long long>(st.max_seen));
     printf("exited\n");
     return 0;
 }
