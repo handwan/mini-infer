@@ -4,6 +4,11 @@
 #include <stdexcept>
 #include <utility>
 
+namespace {
+// 静默期：这段时间没有新请求到来，就认为这批凑完了、立即开跑
+constexpr auto kQuiet = std::chrono::microseconds(200);
+}  // namespace
+
 DynamicBatcher::DynamicBatcher(const Config& config, RunFn run)
     : input_dim_(config.input_dim),
       output_dim_(config.output_dim),
@@ -62,13 +67,17 @@ void DynamicBatcher::WorkerLoop() {
             return;
         }
 
-        // 凑批：从"队列非空"开始计时，等够 window 或凑满
-        // max_batch（谁先到算谁）
+        // 凑批：window 是等待上限；静默 kQuiet（没有新请求）或凑满 max_batch
+        // 就立即开跑——否则 max_batch 大于并发时，每条请求都要硬等满 window
         const auto deadline = std::chrono::steady_clock::now() + window_;
+        auto quiet = std::chrono::steady_clock::now() + kQuiet;
         while (static_cast<int64_t>(queue_.size()) < max_batch_ && !stop_) {
-            if (cv_.wait_until(lk, deadline) == std::cv_status::timeout) {
+            if (cv_.wait_until(lk, std::min(deadline, quiet)) ==
+                std::cv_status::timeout) {
                 break;
             }
+            quiet = std::chrono::steady_clock::now() +
+                    kQuiet;  // 新请求到 → 顺延静默期
         }
 
         batch.clear();

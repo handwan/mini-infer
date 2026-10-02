@@ -12,7 +12,7 @@ ROUNDS="${3:-3}"
 DUR="${4:-3s}"
 PORT="${PORT:-8080}"
 
-CONFIGS_STR="${BATCH_CONFIGS:-0 1;2000 8;5000 16;10000 32}"  # "窗口us 最大批"，分号分隔
+CONFIGS_STR="${BATCH_CONFIGS:-0 1;0 16;200 16;2000 16;10000 32}"  # "窗口us 最大批"，分号分隔
 IFS=';' read -ra CONFIGS <<<"$CONFIGS_STR"
 
 command -v wrk >/dev/null 2>&1 || { echo "wrk not found (sudo apt install wrk)"; exit 1; }

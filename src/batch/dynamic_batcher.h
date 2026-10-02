@@ -15,9 +15,9 @@
 //
 //   请求 → Submit（阻塞等自己的结果）
 //          ↓ 进队列
-//   后台线程：等 window 或凑够 max_batch → 一次 Run → 分发结果
+//   后台线程：凑批（window 为上限，静默即发）→ 一次 Run → 分发结果
 //
-// 取舍：等待窗口越大 → 批越大（吞吐高），但每条请求的延迟也越大。
+// 取舍：窗口越大 → 批越大（吞吐高）；稀疏流量下靠静默期提前开跑，避免硬等。
 class DynamicBatcher {
    public:
     // 参数打包（不然 3 个相邻 int64_t 很容易传反）
@@ -25,7 +25,7 @@ class DynamicBatcher {
         int64_t input_dim = 0;                   // 每条样本的输入长度
         int64_t output_dim = 0;                  // 每条样本的输出长度
         int64_t max_batch = 1;                   // 一批最多几条
-        std::chrono::microseconds window{1000};  // 凑批等待窗口
+        std::chrono::microseconds window{1000};  // 凑批等待上限（静默即发）
     };
 
     // 跑一批：输入是 batch × input_dim 的扁平数据，返回 batch × output_dim
