@@ -12,6 +12,7 @@
 
 #include "batch/dynamic_batcher.h"
 #include "engine/onnx_engine.h"
+#include "gateway/gateway.h"
 #include "httplib.h"
 
 namespace {
@@ -31,6 +32,34 @@ int64_t nowMs() {
 // 打印一次处理的耗时（毫秒）
 void logCost(const char* name, int64_t start_ms) {
     printf("%s took %" PRId64 " ms\n", name, nowMs() - start_ms);
+}
+
+// 网关配置：VLLM_HOST / VLLM_PORT（默认 127.0.0.1:8001）
+Gateway::Config gatewayConfigFromEnv() {
+    Gateway::Config config;
+    if (const char* env = std::getenv("VLLM_HOST")) {
+        config.host = env;
+    }
+    if (const char* env = std::getenv("VLLM_PORT")) {
+        config.port = std::atoi(env);
+    }
+    return config;
+}
+
+// /v1/chat/completions：把请求转发给 vLLM，原样返回结果
+void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
+                          Gateway& gateway) {
+    const int64_t t0 = nowMs();
+    Gateway::Result out;
+    if (gateway.ForwardChat(req.body, out)) {
+        res.status = out.status;
+        res.set_content(out.body, "application/json");
+    } else {
+        res.status = 502;
+        res.set_content(R"({"error":")" + out.error + R"("})",
+                        "application/json");
+    }
+    logCost("gateway", t0);
 }
 
 }  // namespace
@@ -77,6 +106,11 @@ int main(int argc, char** argv) {
             return engine->Run(x);
         });
 
+    // 网关：把 OpenAI 兼容请求转发给 vLLM
+    // 后端地址可换：VLLM_HOST / VLLM_PORT（默认 127.0.0.1:8001）
+    const Gateway::Config gateway_cfg = gatewayConfigFromEnv();
+    Gateway gateway(gateway_cfg);
+
     httplib::Server svr;
 
     // 访问日志：时间戳 方法 路径 → 状态码
@@ -108,6 +142,12 @@ int main(int argc, char** argv) {
         res.set_content(req.target, "text/plain");  // 回显路径+query
         logCost("echo", t0);
     });
+
+    // /v1/chat/completions：转发给 vLLM（OpenAI 兼容接口）
+    svr.Post("/v1/chat/completions",
+             [&gateway](const httplib::Request& req, httplib::Response& res) {
+                 handleChatCompletion(req, res, gateway);
+             });
 
     // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
     svr.Post("/predict", [&batcher, &engine](const httplib::Request& req,
@@ -173,11 +213,13 @@ int main(int argc, char** argv) {
 
     printf(
         "mini-infer listening on http://0.0.0.0:%d (/health, /echo, /version, "
-        "/predict)\n",
+        "/predict, /v1/chat/completions)\n",
         port);
     printf("batching: max_batch=%lld window=%lldus\n",
            static_cast<long long>(batch_cfg.max_batch),
            static_cast<long long>(batch_cfg.window.count()));
+    printf("gateway: vllm backend http://%s:%d\n", gateway_cfg.host.c_str(),
+           gateway_cfg.port);
     if (!svr.listen("0.0.0.0", port)) {
         fprintf(stderr, "failed to start: port %d may be in use\n", port);
         g_stop.store(true);
