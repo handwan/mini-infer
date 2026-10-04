@@ -13,15 +13,15 @@ class Gateway {
     struct Config {
         std::string host = "127.0.0.1";
         int port = 8001;
-        std::chrono::milliseconds connect_timeout{2000};  // 连不上快速失败
-        std::chrono::milliseconds read_timeout{60000};  // 等后端生成的最长时间
+        std::chrono::milliseconds connect_timeout{2000};
+        std::chrono::milliseconds read_timeout{60000};
     };
 
-    // 一次转发的结果
     struct Result {
-        int status = 0;     // 后端 HTTP 状态码
+        int status = 0;
         std::string body;   // 后端响应体（原样透传）
-        std::string error;  // 连接失败/超时时填，如 "connect failed"
+        std::string error;  // 传输层失败描述，如 "Connection timed out"
+        bool timed_out = false;  // 超时类失败 → 504，其余传输失败 → 502
     };
 
     explicit Gateway(Config config);

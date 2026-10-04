@@ -1,5 +1,6 @@
 #include "gateway/gateway.h"
 
+#include <chrono>
 #include <utility>
 
 #include "httplib.h"
@@ -7,21 +8,28 @@
 Gateway::Gateway(Config config) : config_(std::move(config)) {}
 
 bool Gateway::ForwardChat(const std::string& body, Result& out) const {
-    // 拨号：准备一个指向 vLLM 的客户端
     httplib::Client cli(config_.host, config_.port);
-    cli.set_connection_timeout(config_.connect_timeout);  // 连不上快速失败
-    cli.set_read_timeout(config_.read_timeout);  // 连上后最多等 60 秒
+    cli.set_connection_timeout(config_.connect_timeout);
+    cli.set_read_timeout(config_.read_timeout);
 
-    // 说事：把客户端原始 JSON 原样 POST 过去
+    const auto start = std::chrono::steady_clock::now();
     auto res = cli.Post("/v1/chat/completions", body, "application/json");
 
     // 没打通（后端没起/端口错/超时）：res 是空的
     if (!res) {
-        out.error = httplib::to_string(res.error());  // 错误码 → 文字
+        const httplib::Error err = res.error();
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        // 连接超时能直接分辨；读超时会被 httplib 归成 Error::Read（和对端
+        // 断开同码），因此补一个 deadline 判断：用满读预算的失败算读超时。
+        const bool read_timeout =
+            err == httplib::Error::Read && elapsed >= config_.read_timeout;
+        out.timed_out = err == httplib::Error::ConnectionTimeout ||
+                        err == httplib::Error::Timeout || read_timeout;
+        // 读超时时给个准确的描述（库原文是 "Failed to read connection"）
+        out.error = read_timeout ? "Read timeout" : httplib::to_string(err);
         return false;
     }
 
-    // 听到了回话：状态码和响应体原样带回
     out.status = res->status;
     out.body = res->body;
     return true;

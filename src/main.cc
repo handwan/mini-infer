@@ -53,7 +53,6 @@ Gateway::Config gatewayConfigFromEnv() {
     return config;
 }
 
-// /v1/chat/completions：把请求转发给 vLLM，原样返回结果
 void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
                           Gateway& gateway) {
     const int64_t t0 = nowMs();
@@ -62,7 +61,8 @@ void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
         res.status = out.status;
         res.set_content(out.body, "application/json");
     } else {
-        res.status = 502;
+        // 超时类失败 → 504（等上游等超了）；连不上/被断开 → 502
+        res.status = out.timed_out ? 504 : 502;
         res.set_content(R"({"error":")" + out.error + R"("})",
                         "application/json");
     }
