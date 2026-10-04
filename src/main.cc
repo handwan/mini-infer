@@ -34,7 +34,8 @@ void logCost(const char* name, int64_t start_ms) {
     printf("%s took %" PRId64 " ms\n", name, nowMs() - start_ms);
 }
 
-// 网关配置：VLLM_HOST / VLLM_PORT（默认 127.0.0.1:8001）
+// 网关配置：VLLM_HOST / VLLM_PORT / GATEWAY_CONNECT_TIMEOUT_MS /
+// GATEWAY_READ_TIMEOUT_MS（默认 127.0.0.1:8001、2000ms、60000ms）
 Gateway::Config gatewayConfigFromEnv() {
     Gateway::Config config;
     if (const char* env = std::getenv("VLLM_HOST")) {
@@ -42,6 +43,12 @@ Gateway::Config gatewayConfigFromEnv() {
     }
     if (const char* env = std::getenv("VLLM_PORT")) {
         config.port = std::atoi(env);
+    }
+    if (const char* env = std::getenv("GATEWAY_CONNECT_TIMEOUT_MS")) {
+        config.connect_timeout = std::chrono::milliseconds(std::atoll(env));
+    }
+    if (const char* env = std::getenv("GATEWAY_READ_TIMEOUT_MS")) {
+        config.read_timeout = std::chrono::milliseconds(std::atoll(env));
     }
     return config;
 }
