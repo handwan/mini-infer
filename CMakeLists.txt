@@ -38,3 +38,7 @@ target_link_libraries(mini-infer PRIVATE httplib onnxruntime Threads::Threads)
 
 # 可执行文件直接落在 build/ 下，方便 ./build/mini-infer 这样跑
 set_target_properties(mini-infer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# KV cache 对比实验（独立小工具，不参与服务）
+add_executable(kv_cache_demo src/experiments/kv_cache_demo.cc)
+set_target_properties(kv_cache_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
