@@ -20,8 +20,12 @@ namespace {
 std::atomic<bool> g_stop{false};
 
 void onSignal(int /*signo*/) {
-    g_stop.store(true);
-}  // 信号处理里只置标志（别的动作不安全）
+    // 第一次信号：置标志，由 watcher 优雅收尾（等在途请求结束）；
+    // 第二次信号：跳过等待，直接退出（_Exit 在信号处理里是安全的）。
+    if (g_stop.exchange(true)) {
+        std::_Exit(0);
+    }
+}
 
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
