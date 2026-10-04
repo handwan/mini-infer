@@ -35,7 +35,7 @@ void logCost(const char* name, int64_t start_ms) {
 }
 
 // 网关配置：VLLM_HOST / VLLM_PORT / GATEWAY_CONNECT_TIMEOUT_MS /
-// GATEWAY_READ_TIMEOUT_MS（默认 127.0.0.1:8001、2000ms、60000ms）
+// GATEWAY_READ_TIMEOUT_MS / GATEWAY_MAX_RETRIES（默认值见 gateway.h）
 Gateway::Config gatewayConfigFromEnv() {
     Gateway::Config config;
     if (const char* env = std::getenv("VLLM_HOST")) {
@@ -49,6 +49,9 @@ Gateway::Config gatewayConfigFromEnv() {
     }
     if (const char* env = std::getenv("GATEWAY_READ_TIMEOUT_MS")) {
         config.read_timeout = std::chrono::milliseconds(std::atoll(env));
+    }
+    if (const char* env = std::getenv("GATEWAY_MAX_RETRIES")) {
+        config.max_retries = std::atoi(env);
     }
     return config;
 }

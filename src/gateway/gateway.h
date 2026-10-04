@@ -13,6 +13,7 @@ class Gateway {
     struct Config {
         std::string host = "127.0.0.1";
         int port = 8001;
+        int max_retries = 1;  // 只重试"请求没送达"的失败（连接阶段）
         std::chrono::milliseconds connect_timeout{2000};
         std::chrono::milliseconds read_timeout{60000};
     };
