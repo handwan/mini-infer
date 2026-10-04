@@ -29,6 +29,7 @@ add_executable(mini-infer
   src/engine/onnx_engine.cc
   src/batch/dynamic_batcher.cc
   src/gateway/gateway.cc
+  src/gateway/rate_limiter.cc
 )
 
 target_include_directories(mini-infer PRIVATE ${CMAKE_SOURCE_DIR}/src)

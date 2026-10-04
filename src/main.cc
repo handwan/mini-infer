@@ -13,6 +13,7 @@
 #include "batch/dynamic_batcher.h"
 #include "engine/onnx_engine.h"
 #include "gateway/gateway.h"
+#include "gateway/rate_limiter.h"
 #include "httplib.h"
 
 namespace {
@@ -60,9 +61,25 @@ Gateway::Config gatewayConfigFromEnv() {
     return config;
 }
 
+// 限流配置：GATEWAY_RATE_LIMIT_QPS（0 = 关闭）
+double rateLimitQpsFromEnv() {
+    if (const char* env = std::getenv("GATEWAY_RATE_LIMIT_QPS")) {
+        return std::atof(env);
+    }
+    return 0.0;
+}
+
 void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
-                          Gateway& gateway) {
+                          Gateway& gateway, RateLimiter& limiter) {
     const int64_t t0 = nowMs();
+    if (!limiter.Allow(req.remote_addr)) {
+        res.status = 429;
+        res.set_header("Retry-After", "1");
+        res.set_content(R"({"error":"rate limit exceeded"})",
+                        "application/json");
+        logCost("gateway", t0);
+        return;
+    }
     Gateway::Result out;
     if (gateway.ForwardChat(req.body, out)) {
         res.status = out.status;
@@ -125,6 +142,9 @@ int main(int argc, char** argv) {
     const Gateway::Config gateway_cfg = gatewayConfigFromEnv();
     Gateway gateway(gateway_cfg);
 
+    const double rate_qps = rateLimitQpsFromEnv();
+    RateLimiter rate_limiter(rate_qps);
+
     httplib::Server svr;
 
     // 访问日志：时间戳 方法 路径 → 状态码
@@ -159,8 +179,9 @@ int main(int argc, char** argv) {
 
     // /v1/chat/completions：转发给 vLLM（OpenAI 兼容接口）
     svr.Post("/v1/chat/completions",
-             [&gateway](const httplib::Request& req, httplib::Response& res) {
-                 handleChatCompletion(req, res, gateway);
+             [&gateway, &rate_limiter](const httplib::Request& req,
+                                       httplib::Response& res) {
+                 handleChatCompletion(req, res, gateway, rate_limiter);
              });
 
     // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
@@ -234,6 +255,7 @@ int main(int argc, char** argv) {
            static_cast<long long>(batch_cfg.window.count()));
     printf("gateway: vllm backend http://%s:%d\n", gateway_cfg.host.c_str(),
            gateway_cfg.port);
+    printf("rate limit: %.1f qps/client (0 = off)\n", rate_qps);
     if (!svr.listen("0.0.0.0", port)) {
         fprintf(stderr, "failed to start: port %d may be in use\n", port);
         g_stop.store(true);
