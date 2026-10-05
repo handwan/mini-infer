@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
 
     // 以后 version 要出现在别处，再抽成常量
     svr.Get("/version", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(R"({"name":"mini-infer","version":"0.1.0"})",
+        res.set_content(R"({"name":"mini-infer","version":"0.2.0"})",
                         "application/json");
     });
 

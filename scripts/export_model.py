@@ -11,6 +11,7 @@
     batch 轴是**动态**的，服务端做批处理时直接能用
 """
 import argparse
+import logging
 import pathlib
 
 import torch
@@ -39,13 +40,18 @@ def main():
     model = Mlp(args.hidden).eval()
 
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    # 导出器会为未安装的 torchvision 打无关警告（视觉算子），只过滤这一条
+    logging.getLogger("torch.onnx._internal.exporter._registration").addFilter(
+        lambda r: "torchvision is not installed" not in r.getMessage())
+
     torch.onnx.export(
         model,
         torch.randn(1, 4),
         str(out),
         input_names=["input"],
         output_names=["output"],
-        dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
+        dynamic_shapes={"x": {0: "batch"}},
         opset_version=18,  # torch 的导出器要求 >= 18（低于它会自动转换并警告）
     )
     print(f"exported: {out}  ({out.stat().st_size} bytes, hidden={args.hidden})")
