@@ -1,0 +1,9 @@
+# scripts/ 下的 Python 依赖（版本均经本机实测）
+
+# scripts/export_model.py —— 一次性导出 demo 模型（重）
+torch==2.14.0
+onnxscript==0.7.2      # torch.onnx 导出器所需
+onnxruntime==1.30.0    # 导出后自检（CPU 版即可）
+
+# scripts/bench_llm.py、scripts/quant_probe.py —— 基准与探针（轻）
+requests==2.34.2

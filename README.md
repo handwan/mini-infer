@@ -11,9 +11,9 @@ One binary serves both; the paths share only the HTTP layer.
 
 - Linux x86_64; a C++20 compiler (tested: GCC 13.3 and Clang 18 on Ubuntu 24.04); CMake ≥ 3.16 (tested 3.28)
 - Dependencies are fetched by script (pinned + sha256) — no extra system packages beyond a compiler and CMake
-- Python with PyTorch + ONNX Runtime — **only** to export the demo model
+- Python with PyTorch + ONNX Runtime — **only** to export the demo model (pinned in `requirements.txt`)
 - Optional: `wrk` (benchmarks), `clang-format` + `clang-tidy` (`scripts/check.sh`)
-- LLM gateway only: a vLLM server, installed separately (tested 0.30.0); Python `requests` for `scripts/bench_llm.py`
+- LLM gateway only: a vLLM server, installed separately (tested 0.30.0); Python `requests` for the benchmark scripts (pinned in `requirements.txt`)
 
 ## Quick start
 

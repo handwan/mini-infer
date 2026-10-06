@@ -20,8 +20,8 @@ Everything else arrives one of three ways:
 | ONNX Runtime 1.30.0 (CPU tarball) | `scripts/fetch_deps.sh` (pinned + sha256) | v1 ONNX engine |
 | `wrk` | system package (`sudo apt install wrk`) | the benchmark scripts |
 | `clang-format` / `clang-tidy` | system package | `scripts/check.sh` |
-| PyTorch + ONNX Runtime wheels | a Python env of your choice | `scripts/export_model.py` (one-time) |
-| Python `requests` | pip | `scripts/bench_llm.py`, `scripts/quant_probe.py` |
+| PyTorch + onnxscript + onnxruntime | `requirements.txt` (heavy group) | `scripts/export_model.py` (one-time) |
+| Python `requests` | `requirements.txt` (light group) | `scripts/bench_llm.py`, `scripts/quant_probe.py` |
 | A vLLM server | separate install — see [vllm-setup.md](vllm-setup.md) | v2 gateway benchmarks |
 
 ## Build & run
