@@ -19,62 +19,62 @@
 //
 // 取舍：窗口越大 → 批越大（吞吐高）；稀疏流量下靠静默期提前开跑，避免硬等。
 class DynamicBatcher {
-   public:
-    // 参数打包（不然 3 个相邻 int64_t 很容易传反）
-    struct Config {
-        int64_t input_dim = 0;                   // 每条样本的输入长度
-        int64_t output_dim = 0;                  // 每条样本的输出长度
-        int64_t max_batch = 1;                   // 一批最多几条
-        std::chrono::microseconds window{1000};  // 凑批等待上限（静默即发）
-    };
+ public:
+  // 参数打包（不然 3 个相邻 int64_t 很容易传反）
+  struct Config {
+    int64_t input_dim = 0;                   // 每条样本的输入长度
+    int64_t output_dim = 0;                  // 每条样本的输出长度
+    int64_t max_batch = 1;                   // 一批最多几条
+    std::chrono::microseconds window{1000};  // 凑批等待上限（静默即发）
+  };
 
-    // 跑一批：输入是 batch × input_dim 的扁平数据，返回 batch × output_dim
-    using RunFn = std::function<std::vector<float>(const std::vector<float>&,
-                                                   int64_t batch)>;
+  // 跑一批：输入是 batch × input_dim 的扁平数据，返回 batch × output_dim
+  using RunFn = std::function<std::vector<float>(const std::vector<float>&,
+                                                 int64_t batch)>;
 
-    DynamicBatcher(const Config& config, RunFn run);
-    ~DynamicBatcher();
+  DynamicBatcher(const Config& config, RunFn run);
+  ~DynamicBatcher();
 
-    DynamicBatcher(const DynamicBatcher&) = delete;
-    DynamicBatcher& operator=(const DynamicBatcher&) = delete;
+  DynamicBatcher(const DynamicBatcher&) = delete;
+  DynamicBatcher& operator=(const DynamicBatcher&) = delete;
 
-    // 提交一条样本（长度必须 = input_dim），阻塞直到本批算完
-    std::vector<float> Submit(const std::vector<float>& sample);
+  // 提交一条样本（长度必须 = input_dim），阻塞直到本批算完
+  std::vector<float> Submit(const std::vector<float>& sample);
 
-    // 统计（给压测对比用）
-    struct Stats {
-        uint64_t requests = 0;  // 总请求数
-        uint64_t batches = 0;   // 总批数
-        uint64_t max_seen = 0;  // 见过的最大批
-    };
-    Stats stats() const;
+  // 统计（给压测对比用）
+  struct Stats {
+    uint64_t requests = 0;  // 总请求数
+    uint64_t batches = 0;   // 总批数
+    uint64_t max_seen = 0;  // 见过的最大批
+  };
+  Stats stats() const;
 
-   private:
-    struct Pending {  // 一条在等结果的请求
-        std::vector<float> input;
-        std::vector<float> output;
-        std::exception_ptr error;
+ private:
+  struct Pending {  // 一条在等结果的请求
+    std::vector<float> input;
+    std::vector<float> output;
+    std::exception_ptr error;
 
-        std::mutex mu;
-        std::condition_variable cv;
-        bool done = false;
-    };
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+  };
 
-    void WorkerLoop();
+  void WorkerLoop();
 
-    const int64_t input_dim_;
-    const int64_t output_dim_;
-    const int64_t max_batch_;
-    const std::chrono::microseconds window_;
-    RunFn run_;
+  const int64_t input_dim_;
+  const int64_t output_dim_;
+  const int64_t max_batch_;
+  const std::chrono::microseconds window_;
+  RunFn run_;
 
-    std::mutex mu_;
-    std::condition_variable cv_;
-    std::deque<std::shared_ptr<Pending>> queue_;  // 等待凑批的请求
-    bool stop_ = false;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::deque<std::shared_ptr<Pending>> queue_;  // 等待凑批的请求
+  bool stop_ = false;
 
-    mutable std::mutex stats_mu_;
-    Stats stats_;
+  mutable std::mutex stats_mu_;
+  Stats stats_;
 
-    std::thread worker_;  // 放最后：它一构造就开始跑，前面成员必须已就绪
+  std::thread worker_;  // 放最后：它一构造就开始跑，前面成员必须已就绪
 };

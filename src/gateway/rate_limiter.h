@@ -13,19 +13,19 @@
 // 桶表不淘汰（规模够用）；生产环境应按 API key 限流，按 IP 在反向代理
 // 后面会失真。
 class RateLimiter {
-   public:
-    explicit RateLimiter(double qps);
+ public:
+  explicit RateLimiter(double qps);
 
-    // 取 1 个令牌：true = 放行；false = 超限
-    bool Allow(const std::string& key);
+  // 取 1 个令牌：true = 放行；false = 超限
+  bool Allow(const std::string& key);
 
-   private:
-    struct Bucket {
-        double tokens = 0;
-        std::chrono::steady_clock::time_point last;
-    };
+ private:
+  struct Bucket {
+    double tokens = 0;
+    std::chrono::steady_clock::time_point last;
+  };
 
-    const double qps_;
-    std::mutex mutex_;
-    std::unordered_map<std::string, Bucket> buckets_;
+  const double qps_;
+  std::mutex mutex_;
+  std::unordered_map<std::string, Bucket> buckets_;
 };
