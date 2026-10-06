@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <csignal>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -80,16 +81,56 @@ void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
         logCost("gateway", t0);
         return;
     }
-    Gateway::Result out;
-    if (gateway.ForwardChat(req.body, out)) {
-        res.status = out.status;
-        res.set_content(out.body, "application/json");
-    } else {
+
+    Gateway::Stream stream = gateway.OpenChatStream(req.body);
+    if (!stream.Valid()) {
         // 超时类失败 → 504（等上游等超了）；连不上/被断开 → 502
-        res.status = out.timed_out ? 504 : 502;
-        res.set_content(R"({"error":")" + out.error + R"("})",
+        res.status = stream.TimedOut() ? 504 : 502;
+        res.set_content(R"({"error":")" + stream.Error() + R"("})",
                         "application/json");
+        logCost("gateway", t0);
+        return;
     }
+
+    std::string content_type = stream.ContentType();
+    if (content_type.empty()) {
+        content_type = "application/json";
+    }
+    if (!stream.IsSse()) {
+        // 非流式（或上游错误）：整收后按原状态码转回
+        res.status = stream.Status();
+        res.set_content(stream.ReadAll(), content_type);
+        logCost("gateway", t0);
+        return;
+    }
+
+    // SSE：边收边透传；客户端断开 → 停止读上游（句柄析构时关连接）
+    res.status = stream.Status();
+    auto session = std::make_shared<Gateway::Stream>(std::move(stream));
+    res.set_chunked_content_provider(
+        content_type,
+        [session, t0](size_t /*offset*/, httplib::DataSink& sink) {
+            std::array<char, 16384> buf{};
+            bool client_ok = true;
+            for (;;) {
+                const std::ptrdiff_t n = session->Read(buf.data(), buf.size());
+                if (n == 0) {
+                    break;  // 上游正常收尾
+                }
+                if (n < 0) {
+                    printf("gateway: upstream stream interrupted: %s\n",
+                           session->ReadError().c_str());
+                    break;
+                }
+                if (!sink.write(buf.data(), static_cast<size_t>(n))) {
+                    client_ok = false;  // 客户端断开
+                    break;
+                }
+            }
+            sink.done();
+            logCost("gateway stream", t0);
+            return client_ok;
+        });
     logCost("gateway", t0);
 }
 

@@ -1,13 +1,16 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
+#include <memory>
 #include <string>
 
 // 推理网关：把 OpenAI 兼容的请求转发给后端推理引擎（vLLM）
 //
 //   客户端 → mini-infer /v1/chat/completions → vLLM /v1/chat/completions
 //
-// 目前只做非流式转发。
+// 一次请求只连一次上游：先等上游响应头（此时能如实回 502/504/上游状态码），
+// 然后两条路——上游回 SSE 就边收边透传；否则整收后按原状态码转回。
 class Gateway {
    public:
     struct Config {
@@ -18,18 +21,39 @@ class Gateway {
         std::chrono::milliseconds read_timeout{60000};
     };
 
-    struct Result {
-        int status = 0;
-        std::string body;   // 后端响应体（原样透传）
-        std::string error;  // 传输层失败描述，如 "Connection timed out"
-        bool timed_out = false;  // 超时类失败 → 504，其余传输失败 → 502
+    // 一次转发会话：Open 后上游响应头已就绪，body 用 Read 增量取。
+    class Stream {
+       public:
+        Stream() = default;
+        ~Stream();
+        Stream(Stream&&) noexcept;
+        Stream& operator=(Stream&&) noexcept;
+        Stream(const Stream&) = delete;
+        Stream& operator=(const Stream&) = delete;
+
+        [[nodiscard]] bool Valid() const;  // true = 连上且收到响应头
+        [[nodiscard]] int Status() const;  // 上游状态码（Valid 时有效）
+        [[nodiscard]] std::string ContentType() const;
+        [[nodiscard]] bool IsSse() const;  // Content-Type 含 text/event-stream
+        [[nodiscard]] std::string Error() const;  // !Valid 时的传输层描述
+        [[nodiscard]] bool TimedOut() const;  // !Valid 时：超时类失败 → 504
+        [[nodiscard]] std::string ReadError() const;  // Read <0 后的错误描述
+
+        // 增量读上游 body：>0 = 读到的字节数；0 = 正常结束；<0 = 读失败
+        std::ptrdiff_t Read(char* buf, std::size_t len);
+        std::string ReadAll();  // 整收（非 SSE 的响应）
+
+       private:
+        friend class Gateway;
+        struct Impl;
+        explicit Stream(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> impl_;
     };
 
     explicit Gateway(Config config);
 
-    // 转发一次 chat completion 请求；body 是客户端原始 JSON。
-    // 返回 true = 拿到后端响应（看 status/body）；false = 没连上（看 error）
-    bool ForwardChat(const std::string& body, Result& out) const;
+    // 发起转发并等上游响应头；没等到（连不上/超时）时 Valid() 为 false。
+    [[nodiscard]] Stream OpenChatStream(const std::string& body) const;
 
    private:
     Config config_;

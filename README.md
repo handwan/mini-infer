@@ -35,8 +35,8 @@ ONNX model at startup even in gateway mode — run the setup above once first:
 vllm serve Qwen/Qwen2.5-1.5B-Instruct --port 8001 --gpu-memory-utilization 0.80
 ./build/mini-infer 8080                    # same binary; gateway → 127.0.0.1:8001
 
-python3 scripts/bench_llm.py --base http://127.0.0.1:8080 --no-stream   # through the gateway
-python3 scripts/bench_llm.py --base http://127.0.0.1:8001 --concurrency 1,2,4,8 --rounds 3
+python3 scripts/bench_llm.py --base http://127.0.0.1:8080 --concurrency 1,2,4,8 --rounds 3   # streaming, through the gateway
+python3 scripts/bench_llm.py --base http://127.0.0.1:8001 --concurrency 1,2,4,8 --rounds 3   # direct to vLLM
 ```
 
 ## API
@@ -47,7 +47,7 @@ python3 scripts/bench_llm.py --base http://127.0.0.1:8001 --concurrency 1,2,4,8 
 | `/echo` | GET/POST | HTTP-layer baseline (no inference) |
 | `/version` | GET | `{"name":"mini-infer","version":"0.2.0"}` |
 | `/predict` | POST | body: comma-separated floats (`1,2,3,4`) → `{"output":[...]}` |
-| `/v1/chat/completions` | POST | OpenAI-compatible chat; proxied to vLLM. Streaming not supported yet — a `stream: true` request returns the SSE body buffered, not incremental |
+| `/v1/chat/completions` | POST | OpenAI-compatible chat; proxied to vLLM. `stream: true` responses are forwarded incrementally (SSE passthrough) |
 
 Environment knobs (no rebuild needed):
 
