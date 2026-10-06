@@ -155,8 +155,8 @@ Findings:
 - Gateway overhead is unmeasurable at this scale (Δ within run-to-run noise on ~1.7 s
   requests; raw forwarding cost was hundreds of µs in the connection-overhead probe) — non-streaming
   forwarding is effectively free next to generation time.
-- The gateway has no SSE passthrough yet, so TTFT/TPOT can only be measured direct to vLLM.
-  Streaming proxy is on the backlog.
+- The numbers above are direct to vLLM; since the SSE passthrough work the gateway forwards
+  streaming responses too — see "SSE passthrough" below for the through-the-gateway numbers.
 
 ## Quantization — FP16 vs GPTQ INT8/INT4
 
@@ -213,3 +213,31 @@ export HF_ENDPOINT=https://hf-mirror.com
 ~/.venvs/vllm/bin/python scripts/quant_probe.py --base http://127.0.0.1:8001 \
     --model Qwen/Qwen2.5-1.5B-Instruct-GPTQ-Int8
 ```
+
+## SSE passthrough
+
+The gateway now forwards `stream: true` responses incrementally instead of buffering them: it
+waits for the upstream response head (so upstream errors keep their real status codes), then
+pipes SSE chunks as they arrive; a client disconnect stops reading upstream.
+
+Same conditions as the LLM metrics block, via `scripts/bench_llm.py`:
+
+| conc | gateway TTFT | gateway TPOT | gateway sys tok/s | direct TTFT | direct TPOT | direct sys tok/s |
+|--:|--:|--:|--:|--:|--:|--:|
+| 1 | 34.4 ms | 13.4 ms | 73.9 | 33.8 ms | 13.9 ms | 71.3 |
+| 2 | 38.0 ms | 13.6 ms | 144.8 | 40.1 ms | 14.8 ms | 133.0 |
+| 4 | 42.3 ms | 13.7 ms | 286.7 | 39.1 ms | 14.0 ms | 280.3 |
+| 8 | 47.8 ms | 14.0 ms | 560.8 | 41.2 ms | 13.7 ms | 574.3 |
+
+Findings:
+
+- Incremental forwarding is effectively free: TPOT and system throughput match direct runs
+  within noise; TTFT differs by +1–7 ms (one extra hop plus first-chunk forwarding).
+- Errors keep real status codes: an unknown model with `stream: true` returns HTTP 404 JSON
+  through the gateway (not a 200 SSE body); an unreachable backend still gives 504 in ~2.1 s,
+  and ten concurrent unreachable requests finish in **2.02 s wall, all 504**
+  (`GATEWAY_MAX_RETRIES=0`) — same semantics as the non-streaming path.
+- Client disconnect: killing the client mid-stream ends the downstream response and closes
+  the upstream connection within ~2 s (observed at the socket level); vLLM drops the request.
+- The non-streaming path is unchanged (fresh runs match the earlier numbers; four concurrent
+  prompts still answer correctly).
