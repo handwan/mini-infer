@@ -132,6 +132,62 @@ void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
   logCost("gateway", t0);
 }
 
+// /predict 的处理：解析逗号分隔输入 → 走动态批处理 → 返回 JSON。
+void handlePredict(const httplib::Request& req, httplib::Response& res,
+                   OnnxEngine* engine, DynamicBatcher* batcher) {
+  if (batcher == nullptr || engine == nullptr) {
+    res.status = 503;
+    res.set_content(
+        R"({"error":"ONNX model not loaded; run scripts/export_model.py"})",
+        "application/json");
+    return;
+  }
+  std::vector<float> xs;
+  std::stringstream ss(req.body);
+  std::string tok;
+  while (std::getline(ss, tok, ',')) {
+    try {
+      xs.push_back(std::stof(tok));
+    } catch (const std::exception&) {
+      res.status = 400;
+      res.set_content(R"({"error":"invalid number"})", "application/json");
+      return;
+    }
+  }
+
+  const int64_t dim = engine->input_dim();
+  if (xs.empty() || xs.size() % static_cast<size_t>(dim) != 0) {
+    res.status = 400;
+    const std::string err = R"({"error":"input size must be a multiple of )" +
+                            std::to_string(dim) + R"("})";
+    res.set_content(err, "application/json");
+    return;
+  }
+
+  const int64_t t0 = nowMs();
+  std::vector<float> out;
+  for (size_t off = 0; off < xs.size(); off += static_cast<size_t>(dim)) {
+    const std::vector<float> sample(
+        xs.begin() + static_cast<ptrdiff_t>(off),
+        xs.begin() + static_cast<ptrdiff_t>(off + dim));
+    const std::vector<float> r = batcher->Submit(sample);
+    out.insert(out.end(), r.begin(), r.end());
+  }
+  logCost("predict", t0);
+
+  std::string body = R"({"output":[)";
+  for (size_t i = 0; i < out.size(); ++i) {
+    std::array<char, 32> buf{};
+    snprintf(buf.data(), buf.size(), "%.6g", out[i]);
+    if (i > 0) {
+      body += ",";
+    }
+    body += buf.data();
+  }
+  body += "]}";
+  res.set_content(body, "application/json");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -149,20 +205,21 @@ int main(int argc, char** argv) {
     model_path = env;
   }
 
-  // 加载模型：失败就退出（Ort::Exception 也是 std::exception）
+  // 加载模型：缺失/损坏不致命——网关面不依赖它（Ort 异常也属 std::exception）
   std::unique_ptr<OnnxEngine> engine;
   try {
     engine = std::make_unique<OnnxEngine>(model_path);
   } catch (const std::exception& e) {
-    fprintf(stderr, "failed to load model: %s\n", e.what());
-    return 1;
+    fprintf(stderr, "warning: ONNX model unavailable (%s): %s\n",
+            model_path.c_str(), e.what());
+    fprintf(stderr,
+            "         /predict disabled; run scripts/export_model.py to "
+            "enable it\n");
   }
 
   // 动态批处理：多个请求攒成一批一起算
   // 参数支持环境变量（做扫描实验时不用重新编译）：BATCH_MAX、BATCH_WINDOW_US
   DynamicBatcher::Config batch_cfg;
-  batch_cfg.input_dim = engine->input_dim();
-  batch_cfg.output_dim = engine->output_dim();
   batch_cfg.max_batch = 8;
   batch_cfg.window = std::chrono::microseconds(2000);
   if (const char* env = std::getenv("BATCH_MAX")) {
@@ -171,10 +228,16 @@ int main(int argc, char** argv) {
   if (const char* env = std::getenv("BATCH_WINDOW_US")) {
     batch_cfg.window = std::chrono::microseconds(std::atoll(env));
   }
-  DynamicBatcher batcher(
-      batch_cfg, [&engine](const std::vector<float>& x, int64_t /*batch*/) {
-        return engine->Run(x);
-      });
+  // 没模型就没有批处理（尺寸也无从谈起）
+  std::unique_ptr<DynamicBatcher> batcher;
+  if (engine) {
+    batch_cfg.input_dim = engine->input_dim();
+    batch_cfg.output_dim = engine->output_dim();
+    batcher = std::make_unique<DynamicBatcher>(
+        batch_cfg, [&engine](const std::vector<float>& x, int64_t /*batch*/) {
+          return engine->Run(x);
+        });
+  }
 
   // 网关：把 OpenAI 兼容请求转发给 vLLM
   // 后端地址可换：VLLM_HOST / VLLM_PORT（默认 127.0.0.1:8001）
@@ -225,50 +288,7 @@ int main(int argc, char** argv) {
   // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
   svr.Post("/predict", [&batcher, &engine](const httplib::Request& req,
                                            httplib::Response& res) {
-    std::vector<float> xs;
-    std::stringstream ss(req.body);
-    std::string tok;
-    while (std::getline(ss, tok, ',')) {
-      try {
-        xs.push_back(std::stof(tok));
-      } catch (const std::exception&) {
-        res.status = 400;
-        res.set_content(R"({"error":"invalid number"})", "application/json");
-        return;
-      }
-    }
-
-    const int64_t dim = engine->input_dim();
-    if (xs.empty() || xs.size() % static_cast<size_t>(dim) != 0) {
-      res.status = 400;
-      const std::string err = R"({"error":"input size must be a multiple of )" +
-                              std::to_string(dim) + R"("})";
-      res.set_content(err, "application/json");
-      return;
-    }
-
-    const int64_t t0 = nowMs();
-    std::vector<float> out;
-    for (size_t off = 0; off < xs.size(); off += static_cast<size_t>(dim)) {
-      const std::vector<float> sample(
-          xs.begin() + static_cast<ptrdiff_t>(off),
-          xs.begin() + static_cast<ptrdiff_t>(off + dim));
-      const std::vector<float> r = batcher.Submit(sample);
-      out.insert(out.end(), r.begin(), r.end());
-    }
-    logCost("predict", t0);
-
-    std::string body = R"({"output":[)";
-    for (size_t i = 0; i < out.size(); ++i) {
-      std::array<char, 32> buf{};
-      snprintf(buf.data(), buf.size(), "%.6g", out[i]);
-      if (i > 0) {
-        body += ",";
-      }
-      body += buf.data();
-    }
-    body += "]}";
-    res.set_content(body, "application/json");
+    handlePredict(req, res, engine.get(), batcher.get());
   });
 
   // 优雅退出：收到信号 → 另起线程调 stop()（listen 会返回）
@@ -286,9 +306,13 @@ int main(int argc, char** argv) {
       "mini-infer listening on http://0.0.0.0:%d (/health, /echo, /version, "
       "/predict, /v1/chat/completions)\n",
       port);
-  printf("batching: max_batch=%lld window=%lldus\n",
-         static_cast<long long>(batch_cfg.max_batch),
-         static_cast<long long>(batch_cfg.window.count()));
+  if (batcher) {
+    printf("batching: max_batch=%lld window=%lldus\n",
+           static_cast<long long>(batch_cfg.max_batch),
+           static_cast<long long>(batch_cfg.window.count()));
+  } else {
+    printf("ONNX engine: disabled (no model; /predict -> 503)\n");
+  }
   printf("gateway: vllm backend http://%s:%d\n", gateway_cfg.host.c_str(),
          gateway_cfg.port);
   printf("rate limit: %.1f qps/client (0 = off)\n", rate_qps);
@@ -300,14 +324,16 @@ int main(int argc, char** argv) {
   }
 
   watcher.join();
-  const auto st = batcher.stats();
-  const double avg = st.batches > 0 ? static_cast<double>(st.requests) /
-                                          static_cast<double>(st.batches)
-                                    : 0.0;
-  printf("batcher stats: requests=%llu batches=%llu avg=%.2f max=%llu\n",
-         static_cast<unsigned long long>(st.requests),
-         static_cast<unsigned long long>(st.batches), avg,
-         static_cast<unsigned long long>(st.max_seen));
+  if (batcher) {
+    const auto st = batcher->stats();
+    const double avg = st.batches > 0 ? static_cast<double>(st.requests) /
+                                            static_cast<double>(st.batches)
+                                      : 0.0;
+    printf("batcher stats: requests=%llu batches=%llu avg=%.2f max=%llu\n",
+           static_cast<unsigned long long>(st.requests),
+           static_cast<unsigned long long>(st.batches), avg,
+           static_cast<unsigned long long>(st.max_seen));
+  }
   printf("exited\n");
   return 0;
 }

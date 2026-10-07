@@ -28,8 +28,8 @@ scripts/bench.sh                           # quick /echo benchmark
 scripts/sweep_batch.sh                     # batch parameter sweep for /predict
 ```
 
-The gateway needs a running vLLM (any OpenAI-compatible server works). The same binary loads the
-ONNX model at startup even in gateway mode — run the setup above once first:
+The gateway needs a running vLLM (any OpenAI-compatible server works). The binary starts even
+without the ONNX model — `/predict` answers 503 until `scripts/export_model.py` has been run once:
 
 ```bash
 vllm serve Qwen/Qwen2.5-1.5B-Instruct --port 8001 --gpu-memory-utilization 0.80
