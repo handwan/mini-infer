@@ -3,7 +3,7 @@
 A minimal C++ inference server with two faces:
 
 - **ONNX engine** — dynamic batching over ONNX Runtime for small models (`/predict`)
-- **LLM gateway** — a C++ proxy in front of a vLLM backend (`/v1/chat/completions`)
+- **LLM gateway** — a C++ proxy in front of a vLLM backend (`/v1/chat/completions`, `/v1/responses`)
 
 One binary serves both; the paths share only the HTTP layer.
 
@@ -48,6 +48,13 @@ python3 scripts/bench_llm.py --base http://127.0.0.1:8001 --concurrency 1,2,4,8 
 | `/version` | GET | `{"name":"mini-infer","version":"0.2.0"}` |
 | `/predict` | POST | body: comma-separated floats (`1,2,3,4`) → `{"output":[...]}` |
 | `/v1/chat/completions` | POST | OpenAI-compatible chat; proxied to vLLM. `stream: true` responses are forwarded incrementally (SSE passthrough) |
+| `/v1/responses` | POST | OpenAI Responses API; proxied to the same path on vLLM. `stream: true` uses typed SSE events — forwarded incrementally, same as chat |
+| `/v1/responses/{id}` | GET | retrieve a stored response |
+| `/v1/responses/{id}/cancel` | POST | cancel an in-progress (background) response |
+
+Responses store (vLLM 0.30) is off by default — `store`, `background`, retrieve and cancel
+need `VLLM_ENABLE_RESPONSES_API_STORE=1` at launch (without it, `store: true` answers, but
+retrieve → 404).
 
 Environment knobs (no rebuild needed):
 
@@ -74,7 +81,7 @@ window whenever concurrency is below `BATCH_MAX`.
 ### LLM gateway — proxying to vLLM
 
 ```
-client ──► POST /v1/chat/completions
+client ──► POST /v1/chat/completions (or /v1/responses)
              ├─ per-IP token bucket → 429 + Retry-After when over
              └─ forward ─► vLLM :8001
                   ├─ connect timeout 2 s — fail fast (the 300 s default is unusable

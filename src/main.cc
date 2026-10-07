@@ -70,8 +70,9 @@ double rateLimitQpsFromEnv() {
   return 0.0;
 }
 
-void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
-                          Gateway& gateway, RateLimiter& limiter) {
+// 网关转发入口：限流 → 原样转发（method + req.target）→ 按响应分流。
+void handleV1Forward(const httplib::Request& req, httplib::Response& res,
+                     Gateway& gateway, RateLimiter& limiter) {
   const int64_t t0 = nowMs();
   if (!limiter.Allow(req.remote_addr)) {
     res.status = 429;
@@ -81,7 +82,7 @@ void handleChatCompletion(const httplib::Request& req, httplib::Response& res,
     return;
   }
 
-  Gateway::Stream stream = gateway.OpenChatStream(req.body);
+  Gateway::Stream stream = gateway.OpenStream(req.method, req.target, req.body);
   if (!stream.Valid()) {
     // 超时类失败 → 504（等上游等超了）；连不上/被断开 → 502
     res.status = stream.TimedOut() ? 504 : 502;
@@ -278,12 +279,15 @@ int main(int argc, char** argv) {
     logCost("echo", t0);
   });
 
-  // /v1/chat/completions：转发给 vLLM（OpenAI 兼容接口）
-  svr.Post("/v1/chat/completions",
-           [&gateway, &rate_limiter](const httplib::Request& req,
-                                     httplib::Response& res) {
-             handleChatCompletion(req, res, gateway, rate_limiter);
-           });
+  // /v1/*：转发给 vLLM 的同名路径（chat/completions、responses 生命周期）
+  const auto forward_v1 = [&gateway, &rate_limiter](const httplib::Request& req,
+                                                    httplib::Response& res) {
+    handleV1Forward(req, res, gateway, rate_limiter);
+  };
+  svr.Post("/v1/chat/completions", forward_v1);
+  svr.Post("/v1/responses", forward_v1);
+  svr.Get("/v1/responses/:id", forward_v1);          // 取回
+  svr.Post("/v1/responses/:id/cancel", forward_v1);  // 取消
 
   // /predict：body 是逗号分隔的输入（每 4 个数一条样本），返回 JSON
   svr.Post("/predict", [&batcher, &engine](const httplib::Request& req,
@@ -304,7 +308,7 @@ int main(int argc, char** argv) {
 
   printf(
       "mini-infer listening on http://0.0.0.0:%d (/health, /echo, /version, "
-      "/predict, /v1/chat/completions)\n",
+      "/predict, /v1/chat/completions, /v1/responses)\n",
       port);
   if (batcher) {
     printf("batching: max_batch=%lld window=%lldus\n",

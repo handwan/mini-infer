@@ -7,7 +7,7 @@
 
 // 推理网关：把 OpenAI 兼容的请求转发给后端推理引擎（vLLM）
 //
-//   客户端 → mini-infer /v1/chat/completions → vLLM /v1/chat/completions
+//   客户端 → mini-infer /v1/chat/completions、/v1/responses → vLLM 同名路径
 //
 // 一次请求只连一次上游：先等上游响应头（此时能如实回 502/504/上游状态码），
 // 然后两条路——上游回 SSE 就边收边透传；否则整收后按原状态码转回。
@@ -52,8 +52,11 @@ class Gateway {
 
   explicit Gateway(Config config);
 
-  // 发起转发并等上游响应头；没等到（连不上/超时）时 Valid() 为 false。
-  [[nodiscard]] Stream OpenChatStream(const std::string& body) const;
+  // 发起转发并等上游响应头（method + path 原样转发）。
+  // 没等到（连不上/超时）时 Valid() 为 false。
+  [[nodiscard]] Stream OpenStream(const std::string& method,
+                                  const std::string& path,
+                                  const std::string& body) const;
 
  private:
   Config config_;

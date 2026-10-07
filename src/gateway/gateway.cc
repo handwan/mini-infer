@@ -100,15 +100,17 @@ std::string Gateway::Stream::ReadAll() {
 
 Gateway::Gateway(Config config) : config_(std::move(config)) {}
 
-Gateway::Stream Gateway::OpenChatStream(const std::string& body) const {
+Gateway::Stream Gateway::OpenStream(const std::string& method,
+                                    const std::string& path,
+                                    const std::string& body) const {
   for (int attempt = 0; attempt <= config_.max_retries; ++attempt) {
     httplib::Client cli(config_.host, config_.port);
     cli.set_connection_timeout(config_.connect_timeout);
     cli.set_read_timeout(config_.read_timeout);
 
     const auto start = std::chrono::steady_clock::now();
-    auto handle = cli.open_stream("POST", "/v1/chat/completions", {}, {}, body,
-                                  "application/json");
+    auto handle =
+        cli.open_stream(method, path, {}, {}, body, "application/json");
     if (handle.is_valid()) {
       auto impl = std::make_unique<Stream::Impl>();
       impl->handle = std::move(handle);
