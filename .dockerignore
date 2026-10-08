@@ -1,0 +1,13 @@
+# Build artifacts and fetched deps — the builder stage fetches its own
+build/
+third_party/
+models/
+
+# Not needed inside the image
+.git/
+docs/
+tests/
+docker/
+.cache/
+README.md
+requirements.txt
