@@ -57,6 +57,9 @@ export HF_ENDPOINT=https://hf-mirror.com
 - Forgot the `export`? `serve` then hangs with no GPU activity and no error (it stalls connecting to
   huggingface.co, whose DNS is poisoned here to unreachable `2a03:2880:...`). Ctrl-C and restart
   with the env var — the model is cached, nothing re-downloads.
+- Even with the mirror set, a slow mirror can stall startup the same way (log stops right after the
+  hub check, GPU stays at 0 MiB). Once the model is cached, skip the hub entirely:
+  `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` `serve` — startup no longer depends on the network.
 - First start takes ~2 min (weight load); VRAM after startup: ~6.3G / 8G.
 - Run it in its own terminal/tmux — the process dies with the shell that started it.
 
