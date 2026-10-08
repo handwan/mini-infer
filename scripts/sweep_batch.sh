@@ -18,6 +18,13 @@ IFS=';' read -ra CONFIGS <<<"$CONFIGS_STR"
 command -v wrk >/dev/null 2>&1 || { echo "wrk not found (sudo apt install wrk)"; exit 1; }
 [ -f "$MODEL" ] || { echo "model not found: $MODEL"; exit 1; }
 
+# 压测数据要有意义：必须是 Release 构建
+[ -x build/mini-infer ] || { echo "build/mini-infer not found — run: cmake -B build && cmake --build build -j"; exit 1; }
+if ! grep -q 'CMAKE_BUILD_TYPE:STRING=Release' build/CMakeCache.txt 2>/dev/null; then
+  echo "build/ is not a Release build — run: cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"
+  exit 1
+fi
+
 LUA=$(mktemp)
 TMPD=$(mktemp -d)
 trap 'rm -rf "$LUA" "$TMPD"' EXIT
