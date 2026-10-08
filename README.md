@@ -67,7 +67,7 @@ docker run --rm -p 8080:8080 -v "$PWD/models:/app/models" mini-infer
 |----------|--------|-------|
 | `/health` | GET | liveness |
 | `/echo` | GET/POST | HTTP-layer baseline (no inference) |
-| `/version` | GET | `{"name":"mini-infer","version":"0.2.0"}` |
+| `/version` | GET | `{"name":"mini-infer","version":"0.3.0"}` |
 | `/predict` | POST | body: comma-separated floats (`1,2,3,4`) → `{"output":[...]}` |
 | `/v1/chat/completions` | POST | OpenAI-compatible chat; proxied to vLLM. `stream: true` responses are forwarded incrementally (SSE passthrough) |
 | `/v1/responses` | POST | OpenAI Responses API; proxied to the same path on vLLM. `stream: true` uses typed SSE events — forwarded incrementally, same as chat |
@@ -138,9 +138,8 @@ More decisions:
 
 ## Numbers
 
-Qwen2.5-1.5B-Instruct on vLLM 0.30.0, single RTX 4060 Laptop (8 GiB), Ubuntu 24.04; the CPU
-path on an i7-14650HX. Run-to-run variance ±10–15 %; method and raw tables per block in
-[docs/benchmarks.md](docs/benchmarks.md).
+Qwen2.5-1.5B-Instruct on vLLM 0.30.0, single RTX 4060 Laptop (8 GiB). Run-to-run variance
+±10–15 %; method and raw tables per block in [docs/benchmarks.md](docs/benchmarks.md).
 
 - `/predict` (CPU): up to **53.6k rps @ c=32** (tiny MLP); micro-batching only pays off for
   compute-heavy models, not sub-100 µs ones — `BATCH_MAX=1` wins there
@@ -150,7 +149,7 @@ path on an i7-14650HX. Run-to-run variance ±10–15 %; method and raw tables pe
   8 concurrent; system throughput **73.8 → 560.6 tok/s (7.6× at 8×)**. Through the gateway
   (SSE passthrough) TPOT and throughput match direct runs within noise; TTFT +1–7 ms
 - Gateway overhead is below measurement noise next to generation (~1.7 s per request); a fresh
-  upstream TCP + HTTP connection costs ~480 µs — hence the no-pool decision
+  upstream TCP + HTTP connection costs ~480 µs
 - KV cache: 28 KB/token (GQA); vLLM usage is linear at 0.40 / 2.57 / 9.82 % of a 99,616-token
   pool for 0.4k / 2.6k / 9.8k prompt tokens; the toy demo shows caching is ~30–80× cheaper
   than no-cache but still O(N²)
@@ -165,17 +164,16 @@ path on an i7-14650HX. Run-to-run variance ±10–15 %; method and raw tables pe
 - **Batching is not a default win.** With sub-100 µs models, HTTP and scheduling overhead
   dominate — `BATCH_MAX=1` beats micro-batching (53.6k vs 43.1k rps @ c=32). The batching
   machinery earns its keep on the compute-heavy path, not the tiny MLP.
-- **No connection pool — decided by measurement.** Keep-alive saves ~269 µs/request =
-  0.02–0.09 % of a vLLM call; the real reason pools exist (TIME_WAIT churn at high sustained
-  RPS) doesn't apply here. Per-request clients keep the request path lock-free.
+- **Measure before optimizing.** The connection pool looked obviously right; the measured
+  saving (see Design) doesn't justify it. Pooling exists for TIME_WAIT churn at sustained
+  RPS — not for LLM latency.
 - **Fail fast or hang forever.** The dev box silently drops SYNs to unbound ports (no RST), so
   a 300 s default connect timeout was unusable — every outbound client sets explicit timeouts.
 - **httplib collapses read-timeout and peer-close into one error code.** The gateway
   distinguishes 504 from 502 with a read-deadline check (`elapsed >= read_timeout`) — a
   documented heuristic; a vendor patch or another client library would make it exact.
-- **The gateway stays protocol-agnostic.** Even for the stateful Responses API it only
-  forwards bytes (`method + path`) — no schema parsing, no server-side state. That is why the
-  whole lifecycle was two routes, not an implementation.
+- **The gateway stays protocol-agnostic.** Bytes in, bytes out — no schema parsing, no
+  server-side state. Every new endpoint is routes, not an implementation.
 - **Backend flags are the backend's job.** vLLM's Responses store is opt-in
   (`VLLM_ENABLE_RESPONSES_API_STORE=1`); without it `store: true` answers normally but nothing
   is retained. A proxy cannot — and should not — paper over that.
@@ -216,5 +214,5 @@ third_party/        pinned dependencies (fetched by scripts/fetch_deps.sh)
 
 - **v0.1** (tag `v0.1`) — HTTP server, ONNX Runtime engine, dynamic batching, parameter sweeps
 - **v0.2** (tag `v0.2`) — vLLM backend, C++ gateway, KV-cache study, LLM metrics
-- **v0.3** — quantization comparison, SSE passthrough, Responses API, fail-fast startup,
-  Docker packaging, documentation pass
+- **v0.3** (tag `v0.3`) — quantization comparison, SSE passthrough, Responses API, fail-fast
+  startup, Docker packaging, documentation pass
