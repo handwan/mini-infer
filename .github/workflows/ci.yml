@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch dependencies (pinned)
+        run: scripts/fetch_deps.sh
+      - name: Build (Release)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch dependencies (pinned)
+        run: scripts/fetch_deps.sh
+      - name: Build (Debug + ASan/UBSan)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build -j
+      - name: Unit tests under sanitizers
+        run: ctest --test-dir build --output-on-failure
+
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch dependencies (pinned)
+        run: scripts/fetch_deps.sh
+      - name: Build (Debug + TSan)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          # 高熵 ASLR 内核上 TSan 会 FATAL（unexpected memory mapping）；
+          # 连构建也要 setarch——gtest 的构建期测试发现会执行测试二进制
+          setarch "$(uname -m)" -R cmake --build build -j
+      - name: Unit tests under TSan
+        env:
+          TSAN_OPTIONS: "halt_on_error=1"
+        run: setarch "$(uname -m)" -R ctest --test-dir build --output-on-failure

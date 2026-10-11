@@ -12,7 +12,7 @@ RUN bash scripts/fetch_deps.sh
 
 COPY CMakeLists.txt ./
 COPY src/ src/
-RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DMINI_INFER_BUILD_TESTS=OFF \
  && cmake --build build -j"$(nproc)"
 
 # Runtime stage: only the binary and the ONNX Runtime shared libraries

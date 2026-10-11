@@ -40,4 +40,26 @@ if [ ! -d "$ORT_DIR/include" ]; then
 fi
 echo "  onnxruntime $ORT_VER (sha256 ok)"
 
+# GoogleTest（单元测试框架）
+GTEST_VER="v1.15.2"
+GTEST_SHA256="7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926"
+GTEST_TGZ="third_party/googletest-${GTEST_VER}.tar.gz"
+GTEST_DIR="third_party/googletest"
+if [ ! -f "$GTEST_TGZ" ]; then
+  echo "downloading googletest $GTEST_VER ..."
+  URL="https://github.com/google/googletest/archive/refs/tags/${GTEST_VER}.tar.gz"
+  curl -fsSL --max-time 30 -o "$GTEST_TGZ" "$URL" \
+    || curl -fsSL --max-time 120 -o "$GTEST_TGZ" "https://gh-proxy.com/$URL"
+fi
+if ! echo "$GTEST_SHA256  $GTEST_TGZ" | sha256sum -c - >/dev/null 2>&1; then
+  echo "checksum mismatch: file does not match $GTEST_VER"
+  exit 1
+fi
+if [ ! -d "$GTEST_DIR/googletest" ]; then
+  echo "extracting googletest $GTEST_VER ..."
+  mkdir -p "$GTEST_DIR"
+  tar -xzf "$GTEST_TGZ" -C "$GTEST_DIR" --strip-components=1
+fi
+echo "  googletest $GTEST_VER (sha256 ok)"
+
 echo "deps ready"

@@ -42,3 +42,30 @@ set_target_properties(mini-infer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BIN
 # KV cache 对比实验（独立小工具，不参与服务）
 add_executable(kv_cache_demo src/experiments/kv_cache_demo.cc)
 set_target_properties(kv_cache_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# 单元测试（默认构建；Docker 镜像里用 -DMINI_INFER_BUILD_TESTS=OFF 关掉）
+option(MINI_INFER_BUILD_TESTS "Build unit tests" ON)
+if(MINI_INFER_BUILD_TESTS)
+  if(NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/googletest/CMakeLists.txt)
+    message(FATAL_ERROR "third_party/googletest missing — run scripts/fetch_deps.sh first")
+  endif()
+
+  enable_testing()
+  set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)   # 只留 gtest
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  add_subdirectory(third_party/googletest)
+
+  add_executable(unit_tests
+    tests/rate_limiter_test.cc
+    tests/dynamic_batcher_test.cc
+    tests/gateway_test.cc
+    src/gateway/rate_limiter.cc
+    src/gateway/gateway.cc
+    src/batch/dynamic_batcher.cc
+  )
+  target_include_directories(unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(unit_tests PRIVATE GTest::gtest_main httplib Threads::Threads)
+
+  include(GoogleTest)
+  gtest_discover_tests(unit_tests PROPERTIES TIMEOUT 60)
+endif()

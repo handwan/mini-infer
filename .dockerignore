@@ -1,5 +1,5 @@
 # Build artifacts and fetched deps — the builder stage fetches its own
-build/
+build*/
 third_party/
 models/
 
